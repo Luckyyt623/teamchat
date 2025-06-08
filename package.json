@@ -2,9 +2,9 @@
   "name": "slither-team-chat",
   "version": "1.0.0",
   "description": "Paid team chat server for Slither.io",
-  "main": "serverteam.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node serverteam.js"
+    "start": "node server.js"
   },
   "author": "Lucky",
   "license": "MIT",
