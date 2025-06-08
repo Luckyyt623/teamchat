@@ -4,7 +4,7 @@
   "description": "Paid team chat server for Slither.io",
   "main": "serverteam.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node serverteam.js"
   },
   "author": "Your Name",
   "license": "MIT",
