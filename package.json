@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node serverteam.js"
   },
-  "author": "Your Name",
+  "author": "Lucky",
   "license": "MIT",
   "dependencies": {
     "ws": "^8.13.0"
