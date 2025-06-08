@@ -9,8 +9,8 @@ const wss = new WebSocket.Server({ server });
 
 // Mock team codes (in production, store in a secure database)
 const teamCodes = {
-    '[hekbaivskabHaibak]': 'REKT',
-    '[xyz123abcDEF456]': 'ELITE' // Add more teams as needed
+    '[REKT]': 'REKT',
+    '[SMT]': 'SMT' // Add more teams as needed
 };
 
 // Track connected users and their team affiliations
