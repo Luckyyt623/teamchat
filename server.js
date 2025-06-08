@@ -24,17 +24,18 @@ app.get('/', (req, res) => {
 
 // WebSocket handling
 wss.on('connection', (ws) => {
-    console.log('New client connected');
-    ws.username = 'AnonymousSnake';
+    console.log('New client connected at 11:11 AM IST, Sunday, June 08, 2025');
 
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
+            console.log('Received message:', data.type, data);
 
             switch (data.type) {
                 case 'user-join':
-                    users.set(ws, { username: data.username, teamCode: null });
-                    broadcastSystemMessage(`[${data.username}] joined the chat.`);
+                    ws.username = data.username || 'AnonymousSnake'; // Set username on WebSocket object
+                    users.set(ws, { username: ws.username, teamCode: null });
+                    broadcastSystemMessage(`[${ws.username}] joined the chat.`);
                     break;
 
                 case 'auth-request':
@@ -81,13 +82,15 @@ function handleAuthRequest(ws, code) {
     if (teamName) {
         const user = users.get(ws);
         if (user) {
-            user.teamCode = code;
+            user.teamCode = code; // Update teamCode immediately
             ws.send(JSON.stringify({ type: 'auth-response', success: true, code }));
             console.log(`User ${user.username} authenticated for team ${teamName}`);
+            // Automatically join the team after authentication
+            handleJoinTeam(ws, code);
         }
     } else {
         ws.send(JSON.stringify({ type: 'auth-response', success: false }));
-        console.log('Invalid team code attempt');
+        console.log('Invalid team code attempt:', code);
     }
 }
 
@@ -99,9 +102,15 @@ function handleJoinTeam(ws, code) {
             teamUsers = new Set();
             teamChannels.set(code, teamUsers);
         }
-        teamUsers.add(ws);
-        ws.send(JSON.stringify({ type: 'system-message', text: `Joined team channel for ${teamCodes[code]}.` }));
-        console.log(`${user.username} joined team ${teamCodes[code]}`);
+        if (!teamUsers.has(ws)) {
+            teamUsers.add(ws);
+            ws.send(JSON.stringify({ type: 'system-message', text: `Joined team channel for ${teamCodes[code]}.` }));
+            console.log(`${user.username} joined team ${teamCodes[code]}`);
+        } else {
+            console.log(`${user.username} already in team ${teamCodes[code]}`);
+        }
+    } else {
+        console.log(`Join team failed for ${user?.username}: Invalid or unmatched team code ${code}`);
     }
 }
 
@@ -162,5 +171,5 @@ function broadcastSystemMessage(text) {
 
 // Start the server
 server.listen(PORT, () => {
-    console.log(`WebSocket server running on ws://0.0.0.0:${PORT}`);
+    console.log(`WebSocket server running on ws://0.0.0.0:${PORT} at 11:11 AM IST, Sunday, June 08, 2025`);
 });
