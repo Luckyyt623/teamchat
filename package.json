@@ -1,14 +1,19 @@
 {
   "name": "slither-team-chat",
   "version": "1.0.0",
-  "description": "Paid team chat server for Slither.io",
+  "description": "Slither Team Chat Server with WebSocket and Express",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
-  "author": "Lucky",
-  "license": "MIT",
   "dependencies": {
+    "express": "^4.18.2",
     "ws": "^8.13.0"
-  }
+  },
+  "engines": {
+    "node": ">=14"
+  },
+  "keywords": ["slither", "team", "chat", "websocket"],
+  "author": "YourNameHere",
+  "license": "MIT"
 }
