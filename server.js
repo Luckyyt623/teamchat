@@ -1,6 +1,10 @@
-const WebSocket = require('ws');
+const express = require('express');
 const http = require('http');
-const server = http.createServer();
+const WebSocket = require('ws');
+
+const PORT = process.env.PORT || 8080;
+const app = express();
+const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 // Mock team codes (in production, store in a secure database)
@@ -13,8 +17,15 @@ const teamCodes = {
 const users = new Map();
 const teamChannels = new Map(); // Map of team codes to user sets
 
+// HTTP GET route for health check
+app.get('/', (req, res) => {
+    res.send('Slither Team Chat Server is running!');
+});
+
+// WebSocket handling
 wss.on('connection', (ws) => {
     console.log('New client connected');
+    ws.username = 'AnonymousSnake';
 
     ws.on('message', (message) => {
         try {
@@ -122,7 +133,6 @@ function handleChatMessage(ws, text, channel) {
 }
 
 function sendHistory(ws, channel) {
-    // Mock history (in production, fetch from a database)
     const history = [
         { username: 'System', text: 'Welcome to the chat!', timestamp: '12:00', channel: 'global' }
     ];
@@ -150,8 +160,7 @@ function broadcastSystemMessage(text) {
     });
 }
 
-// Start the server on port 8080 (or environment PORT variable)
-const PORT = process.env.PORT || 8080;
+// Start the server
 server.listen(PORT, () => {
     console.log(`WebSocket server running on ws://0.0.0.0:${PORT}`);
 });
