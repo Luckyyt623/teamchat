@@ -150,7 +150,8 @@ function broadcastSystemMessage(text) {
     });
 }
 
-// Start the server on port 8080 (change as needed)
-server.listen(8080, () => {
-    console.log('WebSocket server running on ws://localhost:8080');
+// Start the server on port 8080 (or environment PORT variable)
+const PORT = process.env.PORT || 8080;
+server.listen(PORT, () => {
+    console.log(`WebSocket server running on ws://0.0.0.0:${PORT}`);
 });
