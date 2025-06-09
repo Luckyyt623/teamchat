@@ -1,7 +1,7 @@
 {
-  "name": "slither-team-chat",
+  "name": "ticket-support-server",
   "version": "1.0.0",
-  "description": "Slither Team Chat Server with WebSocket and Express",
+  "description": "WebSocket server for ticket-based support system",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -11,9 +11,14 @@
     "ws": "^8.13.0"
   },
   "engines": {
-    "node": ">=14"
+    "node": ">=14.0.0"
   },
-  "keywords": ["slither", "team", "chat", "websocket"],
-  "author": "YourNameHere",
+  "keywords": [
+    "express",
+    "websocket",
+    "support",
+    "tickets"
+  ],
+  "author": "Your Name",
   "license": "MIT"
 }
