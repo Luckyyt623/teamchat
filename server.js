@@ -7,59 +7,55 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// Mock team codes (in production, store in a secure database)
 const teamCodes = {
     '[REKT]': 'REKT',
-    '[SMT]': 'SMT' // Add more teams as needed
+    '[SMT]': 'SMT'
 };
 
-// Track connected users and their team affiliations
-const users = new Map();
-const teamChannels = new Map(); // Map of team codes to user sets
+const users = new Map();        // WebSocket -> { username, teamCode, joined }
+const teamChannels = new Map(); // teamCode -> Set of sockets
 
-// HTTP GET route for health check
 app.get('/', (req, res) => {
     res.send('Slither Team Chat Server is running!');
 });
 
-// WebSocket handling
 wss.on('connection', (ws) => {
-    console.log('New client connected at 11:11 AM IST, Sunday, June 08, 2025');
+    console.log('Client connected');
 
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
-            console.log('Received message:', data.type, data);
+            const user = users.get(ws);
 
             switch (data.type) {
                 case 'user-join':
-                    ws.username = data.username || 'AnonymousSnake'; // Set username on WebSocket object
-                    users.set(ws, { username: ws.username, teamCode: null });
-                    broadcastSystemMessage(`[${ws.username}] joined the chat.`);
+                    const username = data.username || 'AnonymousSnake';
+                    users.set(ws, { username, teamCode: null, joined: true });
+                    broadcastSystemMessage(`[${username}] joined the chat.`);
                     break;
 
                 case 'auth-request':
-                    handleAuthRequest(ws, data.code);
+                    if (user?.joined) handleAuthRequest(ws, data.code);
                     break;
 
                 case 'join-team':
-                    handleJoinTeam(ws, data.code);
+                    if (user?.joined) handleJoinTeam(ws, data.code);
                     break;
 
                 case 'chat-message':
-                    handleChatMessage(ws, data.text, data.channel);
+                    if (user?.joined) handleChatMessage(ws, data.text, data.channel);
                     break;
 
                 case 'get-history':
-                    sendHistory(ws, data.channel);
+                    if (user?.joined) sendHistory(ws, data.channel);
                     break;
 
                 default:
                     console.log('Unknown message type:', data.type);
             }
         } catch (e) {
-            console.error('Error parsing message:', e);
-            ws.send(JSON.stringify({ type: 'system-message', text: 'Error processing your request.' }));
+            console.error('Invalid message:', e);
+            ws.send(JSON.stringify({ type: 'system-message', text: 'Error processing your request.', timestamp: getCurrentTime() }));
         }
     });
 
@@ -68,8 +64,7 @@ wss.on('connection', (ws) => {
         if (user) {
             broadcastSystemMessage(`[${user.username}] left the chat.`);
             if (user.teamCode) {
-                const teamUsers = teamChannels.get(user.teamCode);
-                if (teamUsers) teamUsers.delete(ws);
+                teamChannels.get(user.teamCode)?.delete(ws);
             }
             users.delete(ws);
         }
@@ -82,68 +77,55 @@ function handleAuthRequest(ws, code) {
     if (teamName) {
         const user = users.get(ws);
         if (user) {
-            user.teamCode = code; // Update teamCode immediately
-            ws.send(JSON.stringify({ type: 'auth-response', success: true, code }));
-            console.log(`User ${user.username} authenticated for team ${teamName}`);
-            // Automatically join the team after authentication
+            user.teamCode = code;
+            ws.send(JSON.stringify({ type: 'auth-response', success: true, code, timestamp: getCurrentTime() }));
             handleJoinTeam(ws, code);
         }
     } else {
-        ws.send(JSON.stringify({ type: 'auth-response', success: false }));
-        console.log('Invalid team code attempt:', code);
+        ws.send(JSON.stringify({ type: 'auth-response', success: false, timestamp: getCurrentTime() }));
     }
 }
 
 function handleJoinTeam(ws, code) {
     const user = users.get(ws);
     if (user && user.teamCode === code) {
-        let teamUsers = teamChannels.get(code);
-        if (!teamUsers) {
-            teamUsers = new Set();
-            teamChannels.set(code, teamUsers);
-        }
-        if (!teamUsers.has(ws)) {
-            teamUsers.add(ws);
-            ws.send(JSON.stringify({ type: 'system-message', text: `Joined team channel for ${teamCodes[code]}.` }));
-            console.log(`${user.username} joined team ${teamCodes[code]}`);
-        } else {
-            console.log(`${user.username} already in team ${teamCodes[code]}`);
-        }
-    } else {
-        console.log(`Join team failed for ${user?.username}: Invalid or unmatched team code ${code}`);
+        let teamUsers = teamChannels.get(code) || new Set();
+        teamChannels.set(code, teamUsers);
+        teamUsers.add(ws);
+
+        ws.send(JSON.stringify({
+            type: 'system-message',
+            text: `Joined team channel for ${teamCodes[code]}`,
+            timestamp: getCurrentTime()
+        }));
     }
 }
 
 function handleChatMessage(ws, text, channel) {
     const user = users.get(ws);
-    if (user) {
-        const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const messageData = {
-            type: 'chat-message',
-            username: user.username,
-            text,
-            timestamp,
-            channel
-        };
+    const timestamp = getCurrentTime();
+    const messageData = {
+        type: 'chat-message',
+        username: user.username,
+        text,
+        timestamp,
+        channel
+    };
 
-        if (channel === 'team' && user.teamCode) {
-            const teamUsers = teamChannels.get(user.teamCode);
-            if (teamUsers) {
-                teamUsers.forEach(client => {
-                    if (client.readyState === WebSocket.OPEN) {
-                        client.send(JSON.stringify(messageData));
-                    }
-                });
+    if (channel === 'team' && user.teamCode) {
+        teamChannels.get(user.teamCode)?.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify(messageData));
             }
-        } else if (channel === 'global') {
-            broadcastMessage(messageData);
-        }
+        });
+    } else if (channel === 'global') {
+        broadcastMessage(messageData);
     }
 }
 
 function sendHistory(ws, channel) {
     const history = [
-        { username: 'System', text: 'Welcome to the chat!', timestamp: '12:00', channel: 'global' }
+        { username: 'System', text: 'Welcome to the chat!', timestamp: getCurrentTime(), channel: 'global' }
     ];
     ws.send(JSON.stringify({ type: 'chat-history', messages: history.filter(msg => msg.channel === channel) }));
 }
@@ -160,7 +142,7 @@ function broadcastSystemMessage(text) {
     const messageData = {
         type: 'system-message',
         text,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        timestamp: getCurrentTime()
     };
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
@@ -169,7 +151,16 @@ function broadcastSystemMessage(text) {
     });
 }
 
-// Start the server
+function getCurrentTime() {
+    return new Date().toLocaleTimeString('en-IN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        timeZone: 'Asia/Kolkata'
+    });
+}
+
 server.listen(PORT, () => {
-    console.log(`WebSocket server running on ws://0.0.0.0:${PORT} at 11:11 AM IST, Sunday, June 08, 2025`);
+    console.log(`✅ WebSocket server running on ws://0.0.0.0:${PORT}`);
 });
