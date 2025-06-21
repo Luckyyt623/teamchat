@@ -14,6 +14,22 @@ const teamCodes = {
 
 const users = new Map();        // WebSocket -> { username, teamCode, joined }
 const teamChannels = new Map(); // teamCode -> Set of sockets
+const messageHistory = {
+    global: [],
+    '[REKT]': [],
+    '[SMT]': []
+};
+
+const MAX_HISTORY = 100;
+const MSG_LIFETIME_MS = 30 * 60 * 1000; // 30 min
+
+// Cleanup job every 60 seconds
+setInterval(() => {
+    const now = Date.now();
+    for (const channel in messageHistory) {
+        messageHistory[channel] = messageHistory[channel].filter(msg => (now - msg._rawTime) < MSG_LIFETIME_MS);
+    }
+}, 60 * 1000);
 
 app.get('/', (req, res) => {
     res.send('Slither Team Chat Server is running!');
@@ -31,7 +47,7 @@ wss.on('connection', (ws) => {
                 case 'user-join':
                     const username = data.username || 'AnonymousSnake';
                     users.set(ws, { username, teamCode: null, joined: true });
-                    broadcastSystemMessage(`[${username}] joined the chat.`);
+                    broadcastSystemMessage(`[${username}] joined the chat.`, 'global');
                     break;
 
                 case 'auth-request':
@@ -62,7 +78,7 @@ wss.on('connection', (ws) => {
     ws.on('close', () => {
         const user = users.get(ws);
         if (user) {
-            broadcastSystemMessage(`[${user.username}] left the chat.`);
+            broadcastSystemMessage(`[${user.username}] left the chat.`, 'global');
             if (user.teamCode) {
                 teamChannels.get(user.teamCode)?.delete(ws);
             }
@@ -103,52 +119,77 @@ function handleJoinTeam(ws, code) {
 
 function handleChatMessage(ws, text, channel) {
     const user = users.get(ws);
-    const timestamp = getCurrentTime();
-    const messageData = {
+    const now = Date.now();
+
+    const msg = {
         type: 'chat-message',
         username: user.username,
         text,
-        timestamp,
-        channel
+        timestamp: getCurrentTime(),
+        channel,
+        _rawTime: now // for cleanup only
     };
 
+    // Store message history
+    if (!messageHistory[channel]) {
+        messageHistory[channel] = [];
+    }
+    messageHistory[channel].push(msg);
+    if (messageHistory[channel].length > MAX_HISTORY) {
+        messageHistory[channel].shift();
+    }
+
+    // Send to correct recipients
     if (channel === 'team' && user.teamCode) {
         teamChannels.get(user.teamCode)?.forEach(client => {
             if (client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify(messageData));
+                client.send(JSON.stringify(msg));
             }
         });
     } else if (channel === 'global') {
-        broadcastMessage(messageData);
+        broadcastMessage(msg);
     }
 }
 
 function sendHistory(ws, channel) {
-    const history = [
-        { username: 'System', text: 'Welcome to the chat!', timestamp: getCurrentTime(), channel: 'global' }
-    ];
-    ws.send(JSON.stringify({ type: 'chat-history', messages: history.filter(msg => msg.channel === channel) }));
+    const history = messageHistory[channel] || [];
+    ws.send(JSON.stringify({ type: 'chat-history', messages: history }));
 }
 
-function broadcastMessage(messageData) {
+function broadcastMessage(msg) {
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(messageData));
+            client.send(JSON.stringify(msg));
         }
     });
 }
 
-function broadcastSystemMessage(text) {
-    const messageData = {
+function broadcastSystemMessage(text, channel) {
+    const now = Date.now();
+    const msg = {
         type: 'system-message',
         text,
-        timestamp: getCurrentTime()
+        timestamp: getCurrentTime(),
+        _rawTime: now
     };
-    wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(messageData));
-        }
-    });
+
+    if (!messageHistory[channel]) {
+        messageHistory[channel] = [];
+    }
+    messageHistory[channel].push(msg);
+    if (messageHistory[channel].length > MAX_HISTORY) {
+        messageHistory[channel].shift();
+    }
+
+    if (channel === 'global') {
+        broadcastMessage(msg);
+    } else {
+        teamChannels.get(channel)?.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify(msg));
+            }
+        });
+    }
 }
 
 function getCurrentTime() {
@@ -162,5 +203,5 @@ function getCurrentTime() {
 }
 
 server.listen(PORT, () => {
-    console.log(`✅ WebSocket server running on ws://0.0.0.0:${PORT}`);
+    console.log(`✅ Team Chat Server running on ws://0.0.0.0:${PORT}`);
 });
