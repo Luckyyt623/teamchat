@@ -12,7 +12,7 @@ const teamCodes = {
     '[SMT]': 'SMT'
 };
 
-const users = new Map();        // WebSocket -> { username, teamCode, joined }
+const users = new Map(); // WebSocket -> { username, teamCode, joined }
 const teamChannels = new Map(); // teamCode -> Set of sockets
 const messageHistory = {
     global: [],
@@ -20,23 +20,28 @@ const messageHistory = {
     '[SMT]': []
 };
 
-const MAX_HISTORY = 100;
-const MSG_LIFETIME_MS = 30 * 60 * 1000; // 30 min
+const MAX_HISTORY = 50; // Reduced to minimize memory usage
+const MSG_LIFETIME_MS = 10 * 60 * 1000; // 10 minutes
 
-// Cleanup job every 60 seconds
+// Cleanup job every 120 seconds to reduce CPU usage
 setInterval(() => {
     const now = Date.now();
     for (const channel in messageHistory) {
         messageHistory[channel] = messageHistory[channel].filter(msg => (now - msg._rawTime) < MSG_LIFETIME_MS);
     }
-}, 60 * 1000);
+}, 120 * 1000);
+
+// Health check endpoint to keep Render instance active
+app.get('/health', (req, res) => {
+    res.status(200).send('OK');
+});
 
 app.get('/', (req, res) => {
     res.send('Slither Team Chat Server is running!');
 });
 
 wss.on('connection', (ws) => {
-    console.log('Client connected');
+    users.set(ws, { username: null, teamCode: null, joined: false });
 
     ws.on('message', (message) => {
         try {
@@ -45,73 +50,63 @@ wss.on('connection', (ws) => {
 
             switch (data.type) {
                 case 'user-join':
-                    const username = data.username || 'AnonymousSnake';
-                    users.set(ws, { username, teamCode: null, joined: true });
-                    broadcastSystemMessage(`[${username}] joined the chat.`, 'global');
-                    break;
-
-                case 'auth-request':
-                    if (user?.joined) handleAuthRequest(ws, data.code);
+                    user.username = data.username || 'AnonymousSnake';
+                    user.joined = true;
+                    broadcastSystemMessage(`[${user.username}] joined the chat.`, 'global');
+                    sendHistory(ws, 'global');
                     break;
 
                 case 'join-team':
-                    if (user?.joined) handleJoinTeam(ws, data.code);
+                    handleJoinTeam(ws, data.teamCode);
                     break;
 
                 case 'chat-message':
-                    if (user?.joined) handleChatMessage(ws, data.text, data.channel);
+                    if (user.joined) handleChatMessage(ws, data.text, data.channel || 'global');
                     break;
 
                 case 'get-history':
-                    if (user?.joined) sendHistory(ws, data.channel);
+                    if (user.joined) sendHistory(ws, data.channel || 'global');
                     break;
 
                 default:
-                    console.log('Unknown message type:', data.type);
+                    ws.send(JSON.stringify({ type: 'system-message', text: 'Unknown message type.', timestamp: getCurrentTime() }));
             }
         } catch (e) {
-            console.error('Invalid message:', e);
             ws.send(JSON.stringify({ type: 'system-message', text: 'Error processing your request.', timestamp: getCurrentTime() }));
         }
     });
 
     ws.on('close', () => {
         const user = users.get(ws);
-        if (user) {
+        if (user && user.joined) {
             broadcastSystemMessage(`[${user.username}] left the chat.`, 'global');
             if (user.teamCode) {
                 teamChannels.get(user.teamCode)?.delete(ws);
             }
             users.delete(ws);
         }
-        console.log('Client disconnected');
     });
 });
 
-function handleAuthRequest(ws, code) {
-    const teamName = teamCodes[code];
-    if (teamName) {
-        const user = users.get(ws);
-        if (user) {
-            user.teamCode = code;
-            ws.send(JSON.stringify({ type: 'auth-response', success: true, code, timestamp: getCurrentTime() }));
-            handleJoinTeam(ws, code);
-        }
-    } else {
-        ws.send(JSON.stringify({ type: 'auth-response', success: false, timestamp: getCurrentTime() }));
-    }
-}
-
 function handleJoinTeam(ws, code) {
     const user = users.get(ws);
-    if (user && user.teamCode === code) {
+    if (!user || !user.joined) return;
+
+    if (teamCodes[code]) {
+        user.teamCode = code;
         let teamUsers = teamChannels.get(code) || new Set();
         teamChannels.set(code, teamUsers);
         teamUsers.add(ws);
-
         ws.send(JSON.stringify({
             type: 'system-message',
             text: `Joined team channel for ${teamCodes[code]}`,
+            timestamp: getCurrentTime()
+        }));
+        sendHistory(ws, code);
+    } else {
+        ws.send(JSON.stringify({
+            type: 'system-message',
+            text: 'Invalid team code.',
             timestamp: getCurrentTime()
         }));
     }
@@ -120,17 +115,15 @@ function handleJoinTeam(ws, code) {
 function handleChatMessage(ws, text, channel) {
     const user = users.get(ws);
     const now = Date.now();
-
     const msg = {
         type: 'chat-message',
         username: user.username,
         text,
         timestamp: getCurrentTime(),
         channel,
-        _rawTime: now // for cleanup only
+        _rawTime: now
     };
 
-    // Store message history
     if (!messageHistory[channel]) {
         messageHistory[channel] = [];
     }
@@ -139,15 +132,14 @@ function handleChatMessage(ws, text, channel) {
         messageHistory[channel].shift();
     }
 
-    // Send to correct recipients
-    if (channel === 'team' && user.teamCode) {
-        teamChannels.get(user.teamCode)?.forEach(client => {
+    if (channel === 'global') {
+        broadcastMessage(msg);
+    } else if (user.teamCode && teamChannels.get(user.teamCode)) {
+        teamChannels.get(user.teamCode).forEach(client => {
             if (client.readyState === WebSocket.OPEN) {
                 client.send(JSON.stringify(msg));
             }
         });
-    } else if (channel === 'global') {
-        broadcastMessage(msg);
     }
 }
 
@@ -158,7 +150,7 @@ function sendHistory(ws, channel) {
 
 function broadcastMessage(msg) {
     wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
+        if (client.readyState === WebSocket.OPEN && users.get(client)?.joined) {
             client.send(JSON.stringify(msg));
         }
     });
@@ -183,8 +175,8 @@ function broadcastSystemMessage(text, channel) {
 
     if (channel === 'global') {
         broadcastMessage(msg);
-    } else {
-        teamChannels.get(channel)?.forEach(client => {
+    } else if (teamChannels.get(channel)) {
+        teamChannels.get(channel).forEach(client => {
             if (client.readyState === WebSocket.OPEN) {
                 client.send(JSON.stringify(msg));
             }
