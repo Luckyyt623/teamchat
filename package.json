@@ -2,7 +2,7 @@
   "name": "slither-team-chat-server",
   "version": "1.0.0",
   "description": "WebSocket-based team chat server for Slither.io mods",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"
