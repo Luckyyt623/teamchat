@@ -7,9 +7,10 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+// Team codes and their corresponding author keys
 const teamCodes = {
-    '[REKT]': 'REKT',
-    '[SMT]': 'SMT'
+    '[REKT]': { code: 'REKT', authorKey: 'authorKeyREKT' },
+    '[SMT]': { code: 'SMT', authorKey: 'authorKeySMT' }
 };
 
 const users = new Map(); // WebSocket -> { username, teamCode, joined }
@@ -57,7 +58,7 @@ wss.on('connection', (ws) => {
                     break;
 
                 case 'join-team':
-                    handleJoinTeam(ws, data.teamCode);
+                    handleJoinTeam(ws, data.teamCode, data.authorKey);
                     break;
 
                 case 'chat-message':
@@ -69,10 +70,18 @@ wss.on('connection', (ws) => {
                     break;
 
                 default:
-                    ws.send(JSON.stringify({ type: 'system-message', text: 'Unknown message type.', timestamp: getCurrentTime() }));
+                    ws.send(JSON.stringify({ 
+                        type: 'system-message', 
+                        text: 'Unknown message type.', 
+                        timestamp: getCurrentTime() 
+                    }));
             }
         } catch (e) {
-            ws.send(JSON.stringify({ type: 'system-message', text: 'Error processing your request.', timestamp: getCurrentTime() }));
+            ws.send(JSON.stringify({ 
+                type: 'system-message', 
+                text: 'Error processing your request.', 
+                timestamp: getCurrentTime() 
+            }));
         }
     });
 
@@ -88,25 +97,25 @@ wss.on('connection', (ws) => {
     });
 });
 
-function handleJoinTeam(ws, code) {
+function handleJoinTeam(ws, code, authorKey) {
     const user = users.get(ws);
     if (!user || !user.joined) return;
 
-    if (teamCodes[code]) {
+    if (teamCodes[code] && teamCodes[code].authorKey === authorKey) {
         user.teamCode = code;
         let teamUsers = teamChannels.get(code) || new Set();
         teamChannels.set(code, teamUsers);
         teamUsers.add(ws);
         ws.send(JSON.stringify({
             type: 'system-message',
-            text: `Joined team channel for ${teamCodes[code]}`,
+            text: `Joined team channel for ${teamCodes[code].code}`,
             timestamp: getCurrentTime()
         }));
         sendHistory(ws, code);
     } else {
         ws.send(JSON.stringify({
             type: 'system-message',
-            text: 'Invalid team code.',
+            text: teamCodes[code] ? 'Invalid author key.' : 'Invalid team code.',
             timestamp: getCurrentTime()
         }));
     }
