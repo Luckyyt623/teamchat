@@ -7,13 +7,13 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// Team codes and their corresponding author keys
+// Team codes, author keys, and their associated usernames
 const teamCodes = {
-    '[REKT]': { code: 'REKT', authorKey: 'authorKeyREKT' },
-    '[SMT]': { code: 'SMT', authorKey: 'authorKeySMT' }
+    '[REKT]': { code: 'REKT', authorKey: 'authorKeyREKT', username: 'REKT_Member' },
+    '[SMT]': { code: 'SMT', authorKey: 'authorKeySMT', username: 'SMT_Member' }
 };
 
-const users = new Map(); // WebSocket -> { username, teamCode, joined }
+const users = new Map(); // WebSocket -> { globalUsername, teamCode, teamUsername, joined }
 const teamChannels = new Map(); // teamCode -> Set of sockets
 const messageHistory = {
     global: [],
@@ -42,7 +42,7 @@ app.get('/', (req, res) => {
 });
 
 wss.on('connection', (ws) => {
-    users.set(ws, { username: null, teamCode: null, joined: false });
+    users.set(ws, { globalUsername: null, teamCode: null, teamUsername: null, joined: false });
 
     ws.on('message', (message) => {
         try {
@@ -51,10 +51,32 @@ wss.on('connection', (ws) => {
 
             switch (data.type) {
                 case 'user-join':
-                    user.username = data.username || 'AnonymousSnake';
                     user.joined = true;
-                    broadcastSystemMessage(`[${user.username}] joined the chat.`, 'global');
-                    sendHistory(ws, 'global');
+                    if (data.authorKey) {
+                        // Team chat: set teamUsername based on authorKey
+                        let found = false;
+                        for (const code in teamCodes) {
+                            if (teamCodes[code].authorKey === data.authorKey) {
+                                user.teamUsername = teamCodes[code].username;
+                                console.log(`Set teamUsername to ${user.teamUsername} for authorKey ${data.authorKey}`);
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            ws.send(JSON.stringify({ 
+                                type: 'system-message', 
+                                text: 'Invalid author key for team chat.', 
+                                timestamp: getCurrentTime() 
+                            }));
+                        }
+                    } else if (data.username) {
+                        // Global chat: set globalUsername
+                        user.globalUsername = data.username || 'AnonymousSnake';
+                        console.log(`Set globalUsername to ${user.globalUsername}`);
+                        broadcastSystemMessage(`[${user.globalUsername}] joined the chat.`, 'global');
+                        sendHistory(ws, 'global');
+                    }
                     break;
 
                 case 'join-team':
@@ -77,6 +99,7 @@ wss.on('connection', (ws) => {
                     }));
             }
         } catch (e) {
+            console.error("Error processing message:", e, message);
             ws.send(JSON.stringify({ 
                 type: 'system-message', 
                 text: 'Error processing your request.', 
@@ -88,8 +111,11 @@ wss.on('connection', (ws) => {
     ws.on('close', () => {
         const user = users.get(ws);
         if (user && user.joined) {
-            broadcastSystemMessage(`[${user.username}] left the chat.`, 'global');
-            if (user.teamCode) {
+            if (user.globalUsername) {
+                broadcastSystemMessage(`[${user.globalUsername}] left the chat.`, 'global');
+            }
+            if (user.teamCode && user.teamUsername) {
+                broadcastSystemMessage(`[${user.teamUsername}] left the team chat.`, user.teamCode);
                 teamChannels.get(user.teamCode)?.delete(ws);
             }
             users.delete(ws);
@@ -103,12 +129,16 @@ function handleJoinTeam(ws, code, authorKey) {
 
     if (teamCodes[code] && teamCodes[code].authorKey === authorKey) {
         user.teamCode = code;
+        user.teamUsername = teamCodes[code].username;
+        console.log(`Joined team ${code} with teamUsername ${user.teamUsername}`);
         let teamUsers = teamChannels.get(code) || new Set();
         teamChannels.set(code, teamUsers);
-        teamUsers.add(ws);
+        if (!teamUsers.has(ws)) {
+            teamUsers.add(ws);
+        }
         ws.send(JSON.stringify({
             type: 'system-message',
-            text: `Joined team channel for ${teamCodes[code].code}`,
+            text: `Joined team channel for ${teamCodes[code].code} as ${user.teamUsername}`,
             timestamp: getCurrentTime()
         }));
         sendHistory(ws, code);
@@ -123,10 +153,20 @@ function handleJoinTeam(ws, code, authorKey) {
 
 function handleChatMessage(ws, text, channel) {
     const user = users.get(ws);
+    const username = channel === 'global' ? user.globalUsername : user.teamUsername;
+    if (!username) {
+        ws.send(JSON.stringify({
+            type: 'system-message',
+            text: 'Username not set for this channel.',
+            timestamp: getCurrentTime()
+        }));
+        return;
+    }
+
     const now = Date.now();
     const msg = {
         type: 'chat-message',
-        username: user.username,
+        username,
         text,
         timestamp: getCurrentTime(),
         channel,
@@ -142,10 +182,14 @@ function handleChatMessage(ws, text, channel) {
     }
 
     if (channel === 'global') {
+        console.log(`Broadcasting global message: ${username}: ${text}`);
         broadcastMessage(msg);
     } else if (user.teamCode && teamChannels.get(user.teamCode)) {
+        console.log(`Broadcasting team message to ${user.teamCode}: ${username}: ${text}`);
         teamChannels.get(user.teamCode).forEach(client => {
-            if (client.readyState === WebSocket.OPEN) {
+            if (client.readyState === WebSocket.OPEN && !client._sentMessages?.has(msg._rawTime)) {
+                client._sentMessages = client._sentMessages || new Set();
+                client._sentMessages.add(msg._rawTime);
                 client.send(JSON.stringify(msg));
             }
         });
@@ -157,10 +201,20 @@ function sendHistory(ws, channel) {
     ws.send(JSON.stringify({ type: 'chat-history', messages: history }));
 }
 
+function sendHistory() {
+    const history = messageHistory[channel] || [];
+    ws._sentMessages = new Set(); // Reset sent messages for history
+    ws.send(JSON.stringify({ type: 'chat-history', messages: history }));
+}
+
 function broadcastMessage(msg) {
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN && users.get(client)?.joined) {
-            client.send(JSON.stringify(msg));
+            if (!client._sentMessages?.has(msg._rawTime)) {
+                client._sentMessages = client._sentMessages || new Set();
+                client._sentMessages.add(msg._rawTime);
+                client.send(JSON.stringify(msg));
+            }
         }
     });
 }
@@ -183,10 +237,14 @@ function broadcastSystemMessage(text, channel) {
     }
 
     if (channel === 'global') {
+        console.log(`Broadcasting global system message: ${text}`);
         broadcastMessage(msg);
     } else if (teamChannels.get(channel)) {
+        console.log(`Broadcasting team system message to ${channel}: ${text}`);
         teamChannels.get(channel).forEach(client => {
-            if (client.readyState === WebSocket.OPEN) {
+            if (client.readyState === WebSocket.OPEN && !client._sentMessages?.has(msg._rawTime)) {
+                client._sentMessages = client._sentMessages || new Set();
+                client._sentMessages.add(msg._rawTime);
                 client.send(JSON.stringify(msg));
             }
         });
