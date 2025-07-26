@@ -42,18 +42,19 @@ app.get('/', (req, res) => {
 });
 
 wss.on('connection', (ws) => {
+    console.log('New WebSocket connection established.');
     users.set(ws, { globalUsername: null, teamCode: null, teamUsername: null, joined: false });
 
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
             const user = users.get(ws);
+            console.log('Received message:', data);
 
             switch (data.type) {
                 case 'user-join':
                     user.joined = true;
                     if (data.authorKey) {
-                        // Team chat: set teamUsername based on authorKey
                         let found = false;
                         for (const code in teamCodes) {
                             if (teamCodes[code].authorKey === data.authorKey) {
@@ -71,7 +72,6 @@ wss.on('connection', (ws) => {
                             }));
                         }
                     } else if (data.username) {
-                        // Global chat: set globalUsername
                         user.globalUsername = data.username || 'AnonymousSnake';
                         console.log(`Set globalUsername to ${user.globalUsername}`);
                         broadcastSystemMessage(`[${user.globalUsername}] joined the chat.`, 'global');
@@ -119,13 +119,21 @@ wss.on('connection', (ws) => {
                 teamChannels.get(user.teamCode)?.delete(ws);
             }
             users.delete(ws);
+            console.log('WebSocket connection closed.');
         }
+    });
+
+    ws.on('error', (error) => {
+        console.error('WebSocket error:', error);
     });
 });
 
 function handleJoinTeam(ws, code, authorKey) {
     const user = users.get(ws);
-    if (!user || !user.joined) return;
+    if (!user || !user.joined) {
+        console.log('Join team failed: User not joined.');
+        return;
+    }
 
     if (teamCodes[code] && teamCodes[code].authorKey === authorKey) {
         user.teamCode = code;
@@ -143,6 +151,7 @@ function handleJoinTeam(ws, code, authorKey) {
         }));
         sendHistory(ws, code);
     } else {
+        console.log(`Join team failed: Invalid ${teamCodes[code] ? 'author key' : 'team code'} for code ${code}, authorKey ${authorKey}`);
         ws.send(JSON.stringify({
             type: 'system-message',
             text: teamCodes[code] ? 'Invalid author key.' : 'Invalid team code.',
@@ -160,6 +169,7 @@ function handleChatMessage(ws, text, channel) {
             text: 'Username not set for this channel.',
             timestamp: getCurrentTime()
         }));
+        console.log(`Chat message failed: Username not set for channel ${channel}`);
         return;
     }
 
@@ -198,13 +208,9 @@ function handleChatMessage(ws, text, channel) {
 
 function sendHistory(ws, channel) {
     const history = messageHistory[channel] || [];
-    ws.send(JSON.stringify({ type: 'chat-history', messages: history }));
-}
-
-function sendHistory() {
-    const history = messageHistory[channel] || [];
     ws._sentMessages = new Set(); // Reset sent messages for history
     ws.send(JSON.stringify({ type: 'chat-history', messages: history }));
+    console.log(`Sent history for channel ${channel} to client.`);
 }
 
 function broadcastMessage(msg) {
